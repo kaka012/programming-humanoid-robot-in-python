@@ -22,7 +22,7 @@ class PIDController(object):
     '''a discretized PID controller, it controls an array of servos,
        e.g. input is an array and output is also an array
     '''
-    def __init__(self, dt, size):
+    def __init__(self, dt, size, sensor_limits):
         '''
         @param dt: step time
         @param size: number of control values
@@ -37,30 +37,6 @@ class PIDController(object):
         self.Kp = 30.0
         self.Ki = 20.0
         self.Kd = 0.1
-        sensor_limits = {
-            'HeadYaw':        (-2.08, 2.08),
-            'HeadPitch':      (-0.51, 0.67),
-            'LShoulderPitch': (-2.08, 2.08),
-            'RShoulderPitch': (-2.08, 2.08),
-            'LShoulderRoll':  (-0.31, 1.31),
-            'RShoulderRoll':  (-1.31, 0.31),
-            'LElbowYaw':      (-2.08, 2.08),
-            'RElbowYaw':      (-2.08, 2.08),
-            'LElbowRoll':     (-1.54,-0.04),
-            'RElbowRoll':     ( 0.04, 1.54),
-            'LHipYawPitch':   (-1.14, 0.74),
-            'RHipYawPitch':   (-1.14, 0.74),
-            'LHipRoll':       (-0.37, 0.78),
-            'RHipRoll':       (-0.78, 0.37),
-            'LHipPitch':      (-1.53, 0.48),
-            'RHipPitch':      (-1.53, 0.48),
-            'LKneePitch':     (-0.09, 2.12),
-            'RKneePitch':     (-0.09, 2.12),
-            'LAnklePitch':    (-1.18, 0.92),
-            'RAnklePitch':    (-1.18, 0.92),
-            'LAnkleRoll':     (-0.76, 0.39),
-            'RAnkleRoll':     (-0.39, 0.76),
-        }
         self.enabled = True
         self.sensor_limits = [sensor_limits[name] for name in JOINT_CMD_NAMES]
         self.speed_limit = 100.0
@@ -124,18 +100,40 @@ class PIDAgent(SparkAgent):
         super(PIDAgent, self).__init__(simspark_ip, simspark_port, teamname, player_id, sync_mode)
         self.joint_names = JOINT_CMD_NAMES.keys()
         number_of_joints = len(self.joint_names)
-        self.joint_controller = PIDController(dt=0.01, size=number_of_joints)
-        self.target_joints = {k: 0 for k in self.joint_names}
+        self.sensor_joints = {k: 0.0 for k in self.joint_names}
+        self.target_joints = {k: 0.0 for k in self.joint_names}
+        self.sensor_limits = {
+            'HeadYaw':        (-2.08, 2.08),
+            'HeadPitch':      (-0.51, 0.67),
+            'LShoulderPitch': (-2.08, 2.08),
+            'RShoulderPitch': (-2.08, 2.08),
+            'LShoulderRoll':  (-0.31, 1.31),
+            'RShoulderRoll':  (-1.31, 0.31),
+            'LElbowYaw':      (-2.08, 2.08),
+            'RElbowYaw':      (-2.08, 2.08),
+            'LElbowRoll':     (-1.54,-0.04),
+            'RElbowRoll':     ( 0.04, 1.54),
+            'LHipYawPitch':   (-1.14, 0.74),
+            'RHipYawPitch':   (-1.14, 0.74),
+            'LHipRoll':       (-0.37, 0.78),
+            'RHipRoll':       (-0.78, 0.37),
+            'LHipPitch':      (-1.53, 0.48),
+            'RHipPitch':      (-1.53, 0.48),
+            'LKneePitch':     (-0.09, 2.12),
+            'RKneePitch':     (-0.09, 2.12),
+            'LAnklePitch':    (-1.18, 0.92),
+            'RAnklePitch':    (-1.18, 0.92),
+            'LAnkleRoll':     (-0.76, 0.39),
+            'RAnkleRoll':     (-0.39, 0.76),
+        }
+        self.joint_controller = PIDController(0.01, number_of_joints, self.sensor_limits)
 
     def think(self, perception):
         action = super(PIDAgent, self).think(perception)
         '''calculate control vector (speeds) from
         perception.joint:   current joints' positions (dict: joint_id -> position (current))
         self.target_joints: target positions (dict: joint_id -> position (target)) '''
-        # if (perception.time + 2) // 8 % 2 == 0:
-        #     self.target_joints['HeadYaw'] = math.sin(perception.time * 2 * math.pi) * abs(perception.time % 4.0 - 2.0)
-        # else:
-        #     self.target_joints['HeadYaw'] = math.floor(perception.time) % 2 - 0.5
+        self.sensor_joints = perception.joint
         joint_angles = np.asarray(
             [perception.joint[joint_id]  for joint_id in JOINT_CMD_NAMES])
         target_angles = np.asarray([self.target_joints.get(joint_id, 

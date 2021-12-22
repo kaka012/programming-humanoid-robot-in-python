@@ -22,7 +22,6 @@
 
 from pid import PIDAgent
 from keyframes import hello
-from spark_agent import JOINT_CMD_NAMES
 
 
 def binary_search(left, right, val_fun, value):
@@ -88,43 +87,74 @@ class AngleInterpolationAgent(PIDAgent):
                  sync_mode=True):
         super(AngleInterpolationAgent, self).__init__(simspark_ip, simspark_port, teamname, player_id, sync_mode)
         self.keyframes = ([], [], [])
-        self.animation_start_time = -1.0
-        self.animation_end_time = -1.0
+        self.animation_running = False
 
     def think(self, perception):
         target_joints = self.angle_interpolation(self.keyframes, perception)
         self.target_joints.update(target_joints)
         return super(AngleInterpolationAgent, self).think(perception)
 
-    def perception_as_keyframe(self, perception,
-                               dt=0.1, names=list(JOINT_CMD_NAMES.keys())):
-        times = [0.0] * len(names)
+    def joints_as_keyframe(self, joints, dt=0.1, joint_names=None):
+        if joint_names is None:
+            joint_names = self.joint_names
+        times = [[0.0] for _ in range(len(joint_names))]
         keys = [
-            [perception.joint.get(j, 0), [3, dt, 0.0], [3, dt, 0.0]]
-            for j in names
+            [[joints.get(j, 0), [3, dt, 0.0], [3, dt, 0.0]]]
+            for j in joint_names
         ]
-        return names, times, keys
+        return joint_names, times, keys
 
-    def reset_animation_time(self, start_time, speed=1.0):
-        animation_start = min([self.keyframes[1][i][0]
-                              for i in range(len(self.keyframes[1]))])
-        animation_end = min([self.keyframes[1][i][-1]
-                            for i in range(len(self.keyframes[1]))])
-        for i in range(len(self.keyframes[1])):
-            for j in range(len(self.keyframes[1][i])):
-                self.keyframes[1][i][j] = (
-                    self.keyframes[1][i][j] - animation_start) / speed + start_time
-        self.animation_start_time = start_time
-        self.animation_end_time = start_time + \
-            (animation_end - animation_start) / speed
+    @staticmethod
+    def animation_length(keyframes):
+        names, times, _ = keyframes
+        animation_start = min([times[i][0] for i in range(len(names))])
+        animation_end = max([times[i][-1] for i in range(len(names))])
+        return animation_start, animation_end
+
+    @staticmethod
+    def animation_transform(keyframes, t0=None, length=None):
+        anim_start, anim_end = AngleInterpolationAgent.animation_length(keyframes)
+        if t0 is None:
+            t0 = anim_start
+        if length is None:
+            length = anim_end - anim_start
+
+        if anim_end - anim_start > 0:
+            scale = length / (anim_end - anim_start)
+        else:
+            scale = 1.0
+        names, times, keys = keyframes
+        for i in range(len(names)):
+            for j in range(len(times[i])):
+                times[i][j] = (times[i][j] - anim_start) * scale + t0
+
+        return (names, times, keys)
+    
+    @staticmethod
+    def animations_concat(keyframes1, keyframes2):
+        n1, t1, k1 = keyframes1
+        n2, t2, k2 = keyframes2
+
+        assert n1 == n2
+
+        for i in range(len(n1)):
+            assert len(t1[i]) == 0 or len(t2[i]) == 0 or t1[i][-1] < t2[i][0]
+            t1[i] += t2[i]
+            k1[i] += k2[i]
+
+        return (n1, t1, k1)
 
     def angle_interpolation(self, keyframes, perception):
         target_joints = {}
         t = perception.time
-        if not (self.animation_start_time <= t <= self.animation_end_time):
-            return target_joints
-
         names, times, keys = keyframes
+        if len(times) == 0:
+            return target_joints
+        if not self.animation_running:
+            self.animation_t0 = t
+        t -= self.animation_t0
+        self.animation_running = True
+
         for i, name in enumerate(names):
             n_times, n_keys = times[i], keys[i]
             j = binary_search(0, len(n_times) - 1, lambda i: n_times[i], t)
@@ -154,11 +184,15 @@ class AngleInterpolationAgent(PIDAgent):
         except KeyError:
             pass
 
+        _, animation_end = self.animation_length(self.keyframes)
+        if t >= animation_end:
+            self.keyframes = ([], [], [])
+            self.animation_running = False
+
         return target_joints
 
 
 if __name__ == '__main__':
     agent = AngleInterpolationAgent()
     agent.keyframes = hello()
-    agent.reset_animation_time(1.0)
     agent.run()

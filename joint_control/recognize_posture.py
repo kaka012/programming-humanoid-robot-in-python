@@ -24,7 +24,6 @@ class PostureRecognitionAgent(AngleInterpolationAgent):
                  player_id=0,
                  sync_mode=True):
         super(PostureRecognitionAgent, self).__init__(simspark_ip, simspark_port, teamname, player_id, sync_mode)
-        os.chdir(os.path.abspath(os.path.dirname(__file__)))
         self.posture = 'unknown'
         self.posture_confidence = 0.0
         self.last_posture_ests = deque([''], maxlen=5)
@@ -65,5 +64,4 @@ class PostureRecognitionAgent(AngleInterpolationAgent):
 if __name__ == '__main__':
     agent = PostureRecognitionAgent()
     agent.keyframes = leftBackToStand()
-    agent.reset_animation_time(3.0)
     agent.run()

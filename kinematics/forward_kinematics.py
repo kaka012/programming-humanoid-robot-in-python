@@ -22,7 +22,7 @@ import sys
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '..', 'joint_control'))
 
 import numpy as np
-from math import sin, cos, pi
+import sympy
 
 from recognize_posture import PostureRecognitionAgent
 
@@ -67,7 +67,7 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
             if k[0] == 'L':
                 self.links[f"R{k[1:]}"] = (v[0], -v[1], v[2])
         # Rotation axes
-        link_quats = {
+        joint_axes = {
             'HeadYaw':        (0, 0, 1),
             'HeadPitch':      (0, 1, 0),
             'LShoulderPitch': (0, 1, 0),
@@ -83,21 +83,30 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
             'LAnklePitch':    (0, 1, 0),
             'LAnkleRoll':     (1, 0, 0),
         }
-        # Mirror the rotation axes, but only for "Roll" links.
-        for k, v in list(link_quats.items()):
+        # Mirror the rotation axes, but only for "Roll" joints.
+        for k, v in list(joint_axes.items()):
             if k[0] == 'L' and not 'HipYawPitch' in k:
                 x, y, z = v
                 if 'Roll' in k:
                     y = -y
-                link_quats[f"R{k[1:]}"] = (x, y, z)
-        # Normalize quaternion length to 1
-        self.link_quats = {k: tuple([x / np.linalg.norm(v) for x in v]) for k,v in link_quats.items()}
+                joint_axes[f"R{k[1:]}"] = (x, y, z)
+        self.joint_axes = joint_axes
 
     def think(self, perception):
         self.forward_kinematics(perception.joint)
         return super(ForwardKinematicsAgent, self).think(perception)
 
-    def local_trans(self, joint_name, joint_angle):
+    @staticmethod
+    def normalize_axis_vector(axis, dtype=None):
+        v = np.array([
+            [axis[0]],
+            [axis[1]],
+            [axis[2]],
+            [0]
+        ], dtype)
+        return v / np.linalg.norm(v)
+
+    def local_trans(self, joint_name, joint_angle, symbolic=False):
         '''calculate local transformation of one joint
 
         :param str joint_name: the name of joint
@@ -105,10 +114,14 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
         :return: transformation
         :rtype: 4x4 matrix
         '''
-        r = np.array([[0], [0], [0], [0]], np.float32)
-        for i in range(3):
-            r[i, 0] = self.link_quats[joint_name][i]
-        r = r / np.linalg.norm(r)
+        if symbolic:
+            dtype = None
+            sin, cos = sympy.sin, sympy.cos
+        else:
+            dtype = np.float32
+            sin, cos = np.sin, np.cos
+
+        r = ForwardKinematicsAgent.normalize_axis_vector(self.joint_axes[joint_name], dtype)
 
         # https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle
         phi = joint_angle
@@ -118,38 +131,40 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
             [ r[2, 0] * sin(phi),            cos(phi), -r[0, 0] * sin(phi), 0],
             [-r[1, 0] * sin(phi),  r[0, 0] * sin(phi),            cos(phi), 0],
             [                  0,                   0,                   0, 1],
-        ], np.float32)
+        ], dtype)
 
         m += np.array([
             [0, 0, 0, self.links[joint_name][0]],
             [0, 0, 0, self.links[joint_name][1]],
             [0, 0, 0, self.links[joint_name][2]],
             [0, 0, 0,                         0],
-        ], np.float32)
+        ], dtype)
 
         return m
 
-    def forward_kinematics(self, joints):
+    def forward_kinematics(self, joints, symbolic=False):
         '''forward kinematics
 
         :param joints: {joint_name: joint_angle}
         '''
+        transforms = {n: np.identity(4) for n in self.joint_names}
         for chain_joints in self.chains.values():
             T = np.identity(4, np.float32)
             for joint in chain_joints:
                 angle = joints[joint]
-                Tl = self.local_trans(joint, angle)
+                Tl = self.local_trans(joint, angle, symbolic)
                 T = T @ Tl
 
-                self.transforms[joint] = T
+                transforms[joint] = T
+        return transforms
 
 # Visualization to verify each joints rotation direction is correct
 # Shown are:
 # - All chains in random (but deterministic) colors
 # - All local transformation directions (x red, y green, z blue) of each joint
 # - All local rotation axes in black of each joint
-def animate(i, anim_angles=True):
-    global ax, agent, anim_data
+def draw(i, ax, agent, transforms={}, anim_angles=False):
+    global anim_data
 
     import itertools
 
@@ -180,9 +195,11 @@ def animate(i, anim_angles=True):
                 d[f"R{k[1:]}"] = d[k]
         # Linearly go from -pi/2 (-90°) to pi/2 (90°) in 32 steps.
         for k in d.keys():
-            d[k] *= -pi / 2 + (i % 33) * pi / 32
+            d[k] *= -np.pi / 2 + (i % 33) * np.pi / 32
 
-        agent.forward_kinematics(d)
+        transforms = agent.forward_kinematics(d)
+    if len(transforms) == 0:
+        transforms = agent.transforms
 
     p_data = {}
     t_ax_len = 0.05
@@ -193,16 +210,13 @@ def animate(i, anim_angles=True):
     for chain_joints in agent.chains.values():
         old_P = np.array([0, 0, 0], np.float32)
         for joint in chain_joints:
-            P = agent.transforms[joint] @ np.array([[0], [0], [0], [1]], np.float32)
-            Px = t_ax_len * (agent.transforms[joint] @ np.array([[1], [0], [0], [0]], np.float32))
-            Py = t_ax_len * (agent.transforms[joint] @ np.array([[0], [1], [0], [0]], np.float32))
-            Pz = t_ax_len * (agent.transforms[joint] @ np.array([[0], [0], [1], [0]], np.float32))
-            Pq = q_ax_len * (agent.transforms[joint] @ np.array([
-                [agent.link_quats[joint][0]],
-                [agent.link_quats[joint][1]],
-                [agent.link_quats[joint][2]],
-                [0],
-            ], np.float32))
+            P = transforms[joint] @ np.array([[0], [0], [0], [1]], np.float32)
+            Px = t_ax_len * (transforms[joint] @ np.array([[1], [0], [0], [0]], np.float32))
+            Py = t_ax_len * (transforms[joint] @ np.array([[0], [1], [0], [0]], np.float32))
+            Pz = t_ax_len * (transforms[joint] @ np.array([[0], [0], [1], [0]], np.float32))
+            r = ForwardKinematicsAgent.normalize_axis_vector(agent.joint_axes[joint], np.float32)
+            Pq = q_ax_len * (transforms[joint] @ r)
+
             if i == 0:
                 p_data[joint] = [zip(old_P, P[:3, 0])] + \
                     [zip(P[:3, 0], (P + p)[:3, 0]) for p in [Pq, Px, Py, Pz]]
@@ -232,9 +246,9 @@ def play_animation():
     ax = fig.add_subplot(111, projection='3d')
     ax.set_box_aspect([1,1,1])
     plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
-    ani = FuncAnimation(fig, animate, frames=128, interval=50, repeat=True,
-                        fargs=(True,))
-    plt.show()
+    ani = FuncAnimation(fig, draw, frames=128, interval=50, repeat=True,
+                        fargs=(ax, agent, {}, True))
+    plt.show(block=True)
 
 def print_checks():
     global ax, agent
@@ -248,10 +262,8 @@ def print_checks():
             joint_name: d[pose]['angles'][i]
             for i, joint_name in enumerate(d['joint_names'])
         }
-        for k, v in joint_angles.items():
-            print(f"{k}: {v}")
         # Evaluate data
-        agent.forward_kinematics(joint_angles)
+        agent.transforms = agent.forward_kinematics(joint_angles)
 
         # Plot data
         import matplotlib.pyplot as plt
@@ -259,13 +271,15 @@ def print_checks():
         ax = fig.add_subplot(111, projection='3d')
         ax.set_box_aspect([1,1,1])
         plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
-        animate(0, False)
+        draw(0, ax, agent)
         for p in d[pose]['positions']:
             ax.plot(*p[:3], 'cx')
-        plt.show()
+        plt.show(block=True)
 
         # Check data
         import transforms3d as tf
+        for k, v in joint_angles.items():
+            print(f"{k}: {v}")
         for joint_name in agent.transforms:
             print(joint_name)
             print(agent.transforms[joint_name])

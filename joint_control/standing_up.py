@@ -6,7 +6,6 @@
 '''
 
 
-from os import name
 from recognize_posture import PostureRecognitionAgent
 from keyframes import leftBackToStand, leftBellyToStand, rightBackToStand, rightBellyToStand
 import random
@@ -18,8 +17,7 @@ class StandingUpAgent(PostureRecognitionAgent):
 
     def standing_up(self, perception):
         posture = self.posture
-        t = perception.time
-        if t < self.animation_end_time:
+        if self.animation_running:
             return
         if perception.time - self.stiffness_on_off_time < self.stiffness_off_cycle \
             or perception.time - self.stiffness_on_off_time - self.stiffness_on_cycle + self.stiffness_off_cycle > 0.5:
@@ -34,15 +32,15 @@ class StandingUpAgent(PostureRecognitionAgent):
             return
         print(f"Preparing animation '{keyframe_fun.__name__}'")
         names, times, keys = keyframe_fun()
-        _, ctimes, ckeys = self.perception_as_keyframe(perception, 0.5, names)
+        _, ctimes, ckeys = self.joints_as_keyframe(perception.joint, 0.5, names)
         if posture == 'Belly':
-            keys[names.index('LShoulderPitch')][0] = ckeys[names.index('LShoulderPitch')]
-            keys[names.index('RShoulderPitch')][0] = ckeys[names.index('RShoulderPitch')]
-        for i in range(len(names)):
-            times[i].insert(0, ctimes[i])
-            keys[i].insert(0, ckeys[i])
-        self.keyframes = (names, times, keys)
-        self.reset_animation_time(t)
+            keys[names.index('LShoulderPitch')][0] = ckeys[names.index('LShoulderPitch')][0]
+            keys[names.index('RShoulderPitch')][0] = ckeys[names.index('RShoulderPitch')][0]
+        keyframes = (names, times, keys)
+        keyframe = (names, ctimes, ckeys)
+        keyframe = self.animation_transform(keyframe, 0)
+        keyframes = self.animation_transform(keyframes, 1)
+        self.keyframes = self.animations_concat(keyframe, keyframes)
 
 class TestStandingUpAgent(StandingUpAgent):
     '''this agent turns off all motor to falls down in fixed cycles
