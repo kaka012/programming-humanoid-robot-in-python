@@ -118,15 +118,15 @@ class InverseKinematicsAgent(ForwardKinematicsAgent):
         :param transform: 4x4 transform matrix
         :return: list of joint angles
         '''
-        angles_curr = np.array([self.target_joints[j] for j in self.chains[effector_name]], np.float32)
-        angles_bound = [self.sensor_limits[j] for j in self.chains[effector_name]]
+        angles_curr = np.array([self.target_joints.get(j, 0.0) for j in self.chains[effector_name]], np.float32)
+        angles_bound = [self.sensor_limits.get(j, (-np.pi, np.pi)) for j in self.chains[effector_name]]
 
         # minimize() may not convert to the global minimum, but only to a local
         # minimum. In that case it's best to restart the IK search from a
         # slightly different state.
         best_err = float('inf')
         best_x = None
-        ik_trials = 50
+        ik_trials = 10
         for ik_i in range(ik_trials):
             # A tiny bit of randomness is required to escape bad initial states
             angles_init = angles_curr + (np.random.rand(*angles_curr.shape) - 0.5) * 0.01
@@ -162,22 +162,26 @@ class InverseKinematicsAgent(ForwardKinematicsAgent):
         times = []
         keys = []
         for j in self.joint_names:
+            if j in self.locked_joints:
+                continue
             names.append(j)
+            key = []
             if interpolate:
                 times.append([0.0, 1.0])
-                keys.append([[self.sensor_joints[j], [3, -0.1, 0.0], [3, 0.1, 0.0]]])
+                key += [[self.sensor_joints[j], [3, -0.1, 0.0], [3, 0.1, 0.0]]]
             else:
                 times.append([0.0])
             if j in self.chains[effector_name]:
                 self.target_joints[j] = angles[self.chains[effector_name].index(j)]
-            keys[-1].append([self.target_joints[j], [3, -0.1, 0.0], [3, 0.1, 0.0]])
+            key += [[self.target_joints[j], [3, -0.1, 0.0], [3, 0.1, 0.0]]]
+            keys.append(key)
         self.keyframes = (names, times, keys)
 
 if __name__ == '__main__':
     agent = InverseKinematicsAgent()
     # test inverse kinematics
     T = np.identity(4)
-    pos = [0, 0.05, -0.26] # x, y, z
+    pos = [0, 0.05, -0.33309 + 0.1] # x, y, z
     T[0, -1] = pos[0]
     T[1, -1] = pos[1]
     T[2, -1] = pos[2]

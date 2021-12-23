@@ -38,27 +38,36 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
 
         # chains defines the name of chain and joints of the chain
         self.chains = {'Head': ['HeadYaw', 'HeadPitch'],
-                       'LArm': ['LShoulderPitch', 'LShoulderRoll', 'LElbowYaw', 'LElbowRoll'],
-                       'RArm': ['RShoulderPitch', 'RShoulderRoll', 'RElbowYaw', 'RElbowRoll'],
+                       'LArm': ['LShoulderPitch', 'LShoulderRoll', 'LElbowYaw', 'LElbowRoll', 'LWristYaw'],
+                       'RArm': ['RShoulderPitch', 'RShoulderRoll', 'RElbowYaw', 'RElbowRoll', 'RWristYaw'],
                        'LLeg': ['LHipYawPitch', 'LHipRoll', 'LHipPitch', 'LKneePitch', 'LAnklePitch', 'LAnkleRoll'],
                        'RLeg': ['RHipYawPitch', 'RHipRoll', 'RHipPitch', 'RKneePitch', 'RAnklePitch', 'RAnkleRoll'],
                        }
+        for chain in self.chains.keys():
+            if chain[0] != 'L':
+                continue
+            self.chains[f"R{chain[1:]}"] = [f"R{joint[1:]}" for joint in self.chains[chain]]
+        for effector in self.chains.keys():
+            self.chains[effector].append(effector)
         # http://doc.aldebaran.com/2-1/family/nao_h21/links_h21.html
         # Defined in mm
         links = {
             'HeadYaw':        (  0.00,  0.00,  126.50),
             'HeadPitch':      (  0.00,  0.00,    0.00),
+            'Head':           (  0.00,  0.00,    0.00),
             'LShoulderPitch': (  0.00, 98.00,  100.00),
             'LShoulderRoll':  (  0.00,  0.00,    0.00),
             'LElbowYaw':      (105.00, 15.00,    0.00),
             'LElbowRoll':     (  0.00,  0.00,    0.00),
             'LWristYaw':      ( 55.95,  0.00,    0.00),
+            'LArm':           ( 57.75,  0.00,   12.31),
             'LHipYawPitch':   (  0.00, 50.00,  -85.00),
             'LHipRoll':       (  0.00,  0.00,    0.00),
             'LHipPitch':      (  0.00,  0.00,    0.00),
             'LKneePitch':     (  0.00,  0.00, -100.00),
             'LAnklePitch':    (  0.00,  0.00, -102.90),
             'LAnkleRoll':     (  0.00,  0.00,    0.00),
+            'LLeg':           (  0.00,  0.00,  -45.19),
         }
         # mm to m
         self.links = {k: tuple([i / 1000 for i in v]) for k, v in links.items()}
@@ -70,11 +79,13 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
         joint_axes = {
             'HeadYaw':        (0, 0, 1),
             'HeadPitch':      (0, 1, 0),
+            'Head':           (0, 0, 1),
             'LShoulderPitch': (0, 1, 0),
             'LShoulderRoll':  (0, 0, 1),
             'LElbowYaw':      (1, 0, 0),
             'LElbowRoll':     (0, 0, 1),
             'LWristYaw':      (1, 0, 0),
+            'LArm':           (1, 0, 0),
             'LHipYawPitch':   (0, 1,-1),
             'RHipYawPitch':   (0, 1, 1),
             'LHipRoll':       (1, 0, 0),
@@ -82,6 +93,7 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
             'LKneePitch':     (0, 1, 0),
             'LAnklePitch':    (0, 1, 0),
             'LAnkleRoll':     (1, 0, 0),
+            'LLeg':           (0, 0, 1),
         }
         # Mirror the rotation axes, but only for "Roll" joints.
         for k, v in list(joint_axes.items()):
@@ -91,6 +103,15 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
                     y = -y
                 joint_axes[f"R{k[1:]}"] = (x, y, z)
         self.joint_axes = joint_axes
+        self.locked_joints = [
+            'Head',
+            'LWristYaw',
+            'LArm',
+            'LLeg',
+        ]
+        for j in self.locked_joints:
+            if j[0] == 'L':
+                self.locked_joints.append(f"R{j[1:]}")
 
     def think(self, perception):
         self.forward_kinematics(perception.joint)
@@ -121,17 +142,21 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
             dtype = np.float32
             sin, cos = np.sin, np.cos
 
-        r = ForwardKinematicsAgent.normalize_axis_vector(self.joint_axes[joint_name], dtype)
+        if joint_name not in self.locked_joints:
+            r = ForwardKinematicsAgent.normalize_axis_vector(self.joint_axes[joint_name], dtype)
 
-        # https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle
-        phi = joint_angle
-        m = r * r.T * (1 - cos(phi))
-        m += np.array([
-            [           cos(phi), -r[2, 0] * sin(phi),  r[1, 0] * sin(phi), 0],
-            [ r[2, 0] * sin(phi),            cos(phi), -r[0, 0] * sin(phi), 0],
-            [-r[1, 0] * sin(phi),  r[0, 0] * sin(phi),            cos(phi), 0],
-            [                  0,                   0,                   0, 1],
-        ], dtype)
+            # https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle
+            s = sin(joint_angle)
+            c = cos(joint_angle)
+            m = r * r.T * (1 - c)
+            m += np.array([
+                [           c, -r[2, 0] * s,  r[1, 0] * s, 0],
+                [ r[2, 0] * s,            c, -r[0, 0] * s, 0],
+                [-r[1, 0] * s,  r[0, 0] * s,            c, 0],
+                [           0,            0,            0, 1],
+            ], dtype)
+        else:
+            m = np.identity(4, dtype)
 
         m += np.array([
             [0, 0, 0, self.links[joint_name][0]],
@@ -151,7 +176,7 @@ class ForwardKinematicsAgent(PostureRecognitionAgent):
         for chain_joints in self.chains.values():
             T = np.identity(4, np.float32)
             for joint in chain_joints:
-                angle = joints[joint]
+                angle = joints.get(joint, 0.0)
                 Tl = self.local_trans(joint, angle, symbolic)
                 T = T @ Tl
 

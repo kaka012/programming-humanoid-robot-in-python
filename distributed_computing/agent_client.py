@@ -67,7 +67,27 @@ class ClientAgent(object):
         self.s.set_transform(effector_name, transform.tolist())
 
 if __name__ == '__main__':
+    import time
     agent = ClientAgent()
-    # TEST CODE HERE
+    angle = agent.get_angle("HeadYaw")
+    print(f"HeadYaw: {angle}")
+    if angle > 0:
+        agent.set_angle("HeadYaw", -0.785)
+    else:
+        agent.set_angle("HeadYaw", 0.785)
+    print(f"Posture: {agent.get_posture()}")
+    agent.execute_keyframes((["HeadPitch"], [[0.0, 1.0, 2.0]], [[[0.0, [3, -0.1, 0.1], [3, -0.1, 0.1]], [-0.5, [3, -0.1, 0.1], [3, -0.1, 0.1]], [0.0, [3, -0.1, 0.1], [3, -0.1, 0.1]]]]))
+    print(f"HeadPitch transform:\n{agent.get_transform('HeadPitch')}")
 
-
+    fps = 30
+    for t in np.linspace(0.0, 2.0, 2 * fps + 1):
+        scale = 0.1
+        z = (1.0 - abs(t - 1.0)) * scale
+        T = np.identity(4)
+        pos = [0, 0.05, -0.330 + z] # x, y, z
+        T[0, -1] = pos[0]
+        T[1, -1] = pos[1]
+        T[2, -1] = pos[2]
+        agent.set_transform("LLeg", T)
+        T[1, -1] = -pos[1]
+        agent.set_transform("RLeg", T)
